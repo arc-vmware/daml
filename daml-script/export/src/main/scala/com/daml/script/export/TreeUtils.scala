@@ -13,7 +13,7 @@ import com.daml.ledger.api.v1.value.{Identifier, Value}
 import com.daml.ledger.api.v1.value.Value.Sum
 import com.daml.lf.data.Ref.PackageId
 import com.daml.lf.data.Time.Timestamp
-import com.daml.lf.language.Graphs
+import com.daml.lf.language.{Graphs, LanguageVersion}
 import scalaz.std.option._
 import scalaz.std.iterable._
 import scalaz.std.set._
@@ -221,6 +221,15 @@ object TreeUtils {
     }
   }
 
+  /** Check whether the given package-id is known to come from a package with an LF version earlier than 1.8.
+    */
+  def isPreLf_1_8(pkgId: String, pkgLfVersions: Map[String, LanguageVersion]): Boolean = {
+    pkgLfVersions.get(pkgId) match {
+      case None => false
+      case Some(lfVersion) => LanguageVersion.Ordering.lt(lfVersion, LanguageVersion.v1_8)
+    }
+  }
+
   sealed trait Command
   final case class CreateCommand(createdEvent: CreatedEvent) extends Command
   final case class ExerciseCommand(exercisedEvent: ExercisedEvent) extends Command
@@ -237,16 +246,31 @@ object TreeUtils {
   object Command {
     def fromTree(tree: TransactionTree): Seq[Command] = {
       val contractKeys = mutable.HashMap.empty[ContractId, Value]
+      def addContractKey(createdEvent: CreatedEvent): Unit = {
+        createdEvent.contractKey.foreach { contractKey =>
+          contractKeys += ContractId(createdEvent.contractId) -> contractKey
+        }
+      }
+      def removeArchivedContractKey(exercisedEvent: ExercisedEvent): Unit = {
+        if (exercisedEvent.consuming) {
+          contractKeys -= ContractId(exercisedEvent.contractId)
+        }
+      }
+      def updateContractKeys(ev: Kind): Unit = {
+        traverseEventInTree(ev, tree) {
+          case (_, Kind.Empty) => ()
+          case (_, Kind.Created(createdEvent)) => addContractKey(createdEvent)
+          case (_, Kind.Exercised(exercisedEvent)) => removeArchivedContractKey(exercisedEvent)
+        }
+      }
       val rootEvents = tree.rootEventIds.map(tree.eventsById(_).kind)
       val commands = ListBuffer.empty[Command]
       rootEvents.foreach {
         case Kind.Empty =>
         case Kind.Created(createdEvent) =>
-          createdEvent.contractKey.foreach { contractKey =>
-            contractKeys += ContractId(createdEvent.contractId) -> contractKey
-          }
           commands += CreateCommand(createdEvent)
-        case Kind.Exercised(exercisedEvent) =>
+          addContractKey(createdEvent)
+        case ev @ Kind.Exercised(exercisedEvent) =>
           val optCreateAndExercise = commands.lastOption.flatMap {
             case CreateCommand(createdEvent)
                 if createdEvent.contractId == exercisedEvent.contractId =>
@@ -266,6 +290,7 @@ object TreeUtils {
                 case None => commands += ExerciseCommand(exercisedEvent)
               }
           }
+          updateContractKeys(ev)
       }
       commands.toSeq
     }
