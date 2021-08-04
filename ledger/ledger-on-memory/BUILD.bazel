@@ -176,7 +176,7 @@ conformance_test(
     ],
     test_tool_args = [
         "--verbose",
-        "--include=ParticipantPruningIT",
+        "--include=MultiParticipantDivulgencePruningIT",
     ],
 )
 
