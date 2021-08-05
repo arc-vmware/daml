@@ -268,6 +268,19 @@ object KeyValueConsumption {
     val hexTxId = parseLedgerString("TransactionId")(
       BaseEncoding.base16.encode(entryId.toByteArray)
     )
+    val divulgedContracts = txEntry.getDivulgedContractsList.asScala.iterator.map {
+      divulgedContract =>
+        val contractId = ContractId.assertFromString(divulgedContract.getContractId)
+        val contractInstance = TransactionCoder
+          .decodeVersionedContractInstance[ContractId](
+            ValueCoder.CidDecoder,
+            divulgedContract.getContractInstance,
+          )
+          .getOrElse(throw new RuntimeException("Could not decode"))
+
+        V1DivulgedContract(contractId = contractId, contractInst = contractInstance)
+    }.toList
+
     Update.TransactionAccepted(
       optSubmitterInfo =
         if (txEntry.hasSubmitterInfo) Some(parseSubmitterInfo(txEntry.getSubmitterInfo)) else None,
@@ -285,19 +298,7 @@ object KeyValueConsumption {
       transaction = CommittedTransaction(transaction),
       transactionId = hexTxId,
       recordTime = recordTime,
-      divulgedContracts =
-        txEntry.getDivulgedContractsList.asScala.iterator.map { divulgedContract =>
-          val cId = Value.ContractId.assertFromString(divulgedContract.getContractId)
-          val coInst = TransactionCoder
-            .decodeVersionedContractInstance[ContractId](
-              ValueCoder.CidDecoder,
-              divulgedContract.getContractInstance,
-            )
-            .getOrElse(throw new RuntimeException("Could not decode"))
-          divulgedContract.getContractInstance
-
-          V1DivulgedContract(contractId = cId, contractInst = coInst)
-        }.toList,
+      divulgedContracts = divulgedContracts,
       blindingInfo =
         if (txEntry.hasBlindingInfo)
           Some(Conversions.decodeBlindingInfo(txEntry.getBlindingInfo))
